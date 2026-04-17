@@ -20,7 +20,7 @@ This document explains how to use:
 - Extracts the NERSC IRI access token from `other_tokens`.
 - Requires tokens for the selected facilities to be present in `other_tokens`.
 - Prints both the NERSC IRI access token and the ALCF IRI access token with `--print-token`.
-- Can optionally validate the NERSC IRI token by calling the IRI `account/projects` endpoint.
+- Can optionally validate selected facility tokens using facility-specific endpoints.
 - Saves token data to a secure local file by default.
 - Reuses and refreshes saved tokens when possible.
 
@@ -112,22 +112,39 @@ This attempts to refresh saved tokens without opening a browser login flow.
 It refreshes the top-level Globus Auth token when possible and also refreshes the selected facility tokens from `other_tokens` when their refresh tokens are available.
 If refresh is not possible, or if refresh does not return all requested facility tokens, the script exits with an error instead of starting interactive login.
 
-## Validate the NERSC IRI token
+## Validate facility tokens
 
 ```bash
 python get_globus_token.py --validate-iri
 ```
 
-This calls:
+Validation is facility-specific:
+
+- `nersc` calls:
 
 ```bash
 GET https://api.iri.nersc.gov/api/v1/account/projects
 ```
 
-with the NERSC IRI access token from `other_tokens`.
-If the response includes `session_info.authentications: {}`, the script treats that as a bad session and exits with guidance to re-run using `--force-login --prompt-login`.
+- `alcf` calls:
 
-`--validate-iri` requires that `nersc` is included in `--facilities`.
+```bash
+GET https://api.alcf.anl.gov/api/v1/filesystem/ls?path=~
+```
+
+with the selected facility access token from `other_tokens`.
+
+For `nersc`, if the response includes `session_info.authentications: {}`, the script treats that as a bad session and exits with guidance to re-run using `--force-login --prompt-login`.
+
+For `alcf`, validation is based on listing files under the user's home directory.
+
+You can override the default validation endpoints if needed:
+
+```bash
+python get_globus_token.py --validate-iri \
+  --nersc-validate-url https://api.iri.nersc.gov/api/v1/account/projects \
+  --alcf-validate-url 'https://api.alcf.anl.gov/api/v1/filesystem/ls?path=~'
+```
 
 You can combine validation with token printing or refresh-only mode:
 
@@ -135,6 +152,7 @@ You can combine validation with token printing or refresh-only mode:
 python get_globus_token.py --refresh-only --validate-iri --print-token
 python get_globus_token.py --force-login --prompt-login --validate-iri
 python get_globus_token.py --facilities nersc --validate-iri --print-token
+python get_globus_token.py --facilities alcf --validate-iri --print-token
 ```
 
 ## Use a custom token file path

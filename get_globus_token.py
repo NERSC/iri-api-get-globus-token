@@ -43,7 +43,8 @@ REQUIRED_SCOPES = {
     "email",
     "urn:globus:auth:scope:auth.globus.org:view_identities",
 }
-DEFAULT_IRI_VALIDATE_URL = "https://api.iri.nersc.gov/api/v1/account/projects"
+DEFAULT_NERSC_VALIDATE_URL = "https://api.iri.nersc.gov/api/v1/account/projects"
+DEFAULT_ALCF_VALIDATE_URL = "https://api.alcf.anl.gov/api/v1/filesystem/ls?path=~"
 
 SCOPE_LABELS = {
     config["scope"]: config["label"] for config in FACILITY_SCOPE_MAP.values()
@@ -103,14 +104,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--validate-iri",
         action="store_true",
-        help="Validate the IRI token by calling the IRI account/projects endpoint.",
+        help=(
+            "Validate selected facility tokens using facility-specific IRI endpoints."
+        ),
     )
     parser.add_argument(
-        "--iri-validate-url",
-        default=DEFAULT_IRI_VALIDATE_URL,
+        "--nersc-validate-url",
+        default=DEFAULT_NERSC_VALIDATE_URL,
         help=(
-            "IRI endpoint used by --validate-iri "
-            f"(default: {DEFAULT_IRI_VALIDATE_URL})"
+            "NERSC IRI endpoint used by --validate-iri "
+            f"(default: {DEFAULT_NERSC_VALIDATE_URL})"
+        ),
+    )
+    parser.add_argument(
+        "--alcf-validate-url",
+        default=DEFAULT_ALCF_VALIDATE_URL,
+        help=(
+            "ALCF IRI endpoint used by --validate-iri "
+            f"(default: {DEFAULT_ALCF_VALIDATE_URL})"
         ),
     )
     return parser.parse_args()
@@ -235,14 +246,12 @@ def validate_auth_data(auth_data: dict, facilities: list[str]) -> dict:
     return auth_data
 
 
-def validate_nersc_iri_token(
-    nersc_iri_token_data: dict, validate_url: str
-) -> dict | list:
+def validate_token_request(token_data: dict, validate_url: str) -> dict | list:
     request = urllib.request.Request(
         validate_url,
         headers={
             "accept": "application/json",
-            "Authorization": f"Bearer {nersc_iri_token_data['access_token']}",
+            "Authorization": f"Bearer {token_data['access_token']}",
         },
         method="GET",
     )
@@ -265,6 +274,12 @@ def validate_nersc_iri_token(
             f"IRI validation returned non-JSON data from {validate_url}"
         ) from exc
 
+    return data
+
+
+def validate_nersc_iri_token(token_data: dict, validate_url: str) -> dict | list:
+    data = validate_token_request(token_data, validate_url)
+
     if isinstance(data, dict):
         session_info = data.get("session_info")
         if isinstance(session_info, dict):
@@ -276,6 +291,10 @@ def validate_nersc_iri_token(
                 )
 
     return data
+
+
+def validate_alcf_iri_token(token_data: dict, validate_url: str) -> dict | list:
+    return validate_token_request(token_data, validate_url)
 
 
 def interactive_login(
@@ -367,8 +386,6 @@ def main() -> None:
     if args.force_login and args.refresh_only:
         raise RuntimeError("Choose only one of --force-login or --refresh-only")
     facilities = get_selected_facilities(args)
-    if args.validate_iri and "nersc" not in facilities:
-        raise RuntimeError("--validate-iri requires including the 'nersc' facility")
 
     client_id = get_client_id(facilities)
     client = globus_sdk.NativeAppAuthClient(client_id)
@@ -413,19 +430,46 @@ def main() -> None:
     save_tokens(args.token_file, auth_data)
 
     if args.validate_iri:
-        nersc_iri_token_data = get_facility_token(auth_data, "nersc")
-        validation_data = validate_nersc_iri_token(
-            nersc_iri_token_data, args.iri_validate_url
-        )
-        print(f"IRI validation succeeded against {args.iri_validate_url}")
-        if isinstance(validation_data, dict):
-            session_info = validation_data.get("session_info")
-            if isinstance(session_info, dict):
-                session_id = session_info.get("session_id")
-                if session_id:
-                    print(f"IRI session_id: {session_id}")
-        elif isinstance(validation_data, list):
-            print(f"IRI validation response items: {len(validation_data)}")
+        for facility in facilities:
+            token_data = get_facility_token(auth_data, facility)
+            if facility == "nersc":
+                validation_data = validate_nersc_iri_token(
+                    token_data, args.nersc_validate_url
+                )
+                print(
+                    "NERSC IRI validation succeeded against "
+                    f"{args.nersc_validate_url}"
+                )
+                if isinstance(validation_data, dict):
+                    session_info = validation_data.get("session_info")
+                    if isinstance(session_info, dict):
+                        session_id = session_info.get("session_id")
+                        if session_id:
+                            print(f"NERSC IRI session_id: {session_id}")
+                elif isinstance(validation_data, list):
+                    print(
+                        f"NERSC IRI validation response items: {len(validation_data)}"
+                    )
+            elif facility == "alcf":
+                validation_data = validate_alcf_iri_token(
+                    token_data, args.alcf_validate_url
+                )
+                print(
+                    "ALCF IRI validation succeeded against "
+                    f"{args.alcf_validate_url}"
+                )
+                if isinstance(validation_data, list):
+                    print(
+                        f"ALCF home directory entries returned: {len(validation_data)}"
+                    )
+                elif isinstance(validation_data, dict):
+                    for key in ("items", "entries", "paths", "files", "data"):
+                        value = validation_data.get(key)
+                        if isinstance(value, list):
+                            print(
+                                f"ALCF home directory entries returned: {len(value)}"
+                            )
+                            break
 
     print(f"Saved token data to {args.token_file}")
     print(f"Selected facilities: {', '.join(facilities)}")
