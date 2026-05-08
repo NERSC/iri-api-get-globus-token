@@ -128,16 +128,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--validate-iri",
         action="store_true",
-        help="Validate a selected facility token by calling an IRI endpoint.",
-    )
-    parser.add_argument(
-        "--validate-facility",
-        choices=sorted(FACILITY_SCOPE_MAP),
-        default=None,
-        help=(
-            "Facility token to validate with --validate-iri "
-            "(default: the only selected facility, otherwise nersc)."
-        ),
+        help="Validate selected facility tokens by calling IRI endpoints.",
     )
     parser.add_argument(
         "--iri-validate-url",
@@ -309,19 +300,16 @@ def build_alcf_ls_validate_url(resource_id: str, path: str) -> str:
     )
 
 
-def get_validate_facility(args: argparse.Namespace, facilities: list[str]) -> str:
-    if args.validate_facility:
-        validate_facility = args.validate_facility
-    elif len(facilities) == 1:
-        validate_facility = facilities[0]
-    else:
-        validate_facility = "nersc"
-
-    if validate_facility not in facilities:
+def get_validate_facilities(
+    args: argparse.Namespace, facilities: list[str]
+) -> list[str]:
+    if args.iri_validate_url and len(facilities) > 1:
         raise RuntimeError(
-            f"--validate-iri requires including the '{validate_facility}' facility"
+            "--iri-validate-url can only be used when validating one facility. "
+            "Select one facility with --facilities."
         )
-    return validate_facility
+
+    return facilities
 
 
 def get_validate_url(args: argparse.Namespace, validate_facility: str) -> str:
@@ -506,8 +494,8 @@ def main() -> None:
     if args.prompt_login and args.no_prompt_login:
         raise RuntimeError("Choose only one of --prompt-login or --no-prompt-login")
     facilities = get_selected_facilities(args)
-    validate_facility = (
-        get_validate_facility(args, facilities) if args.validate_iri else None
+    validate_facilities = (
+        get_validate_facilities(args, facilities) if args.validate_iri else []
     )
 
     client_id = get_client_id(facilities)
@@ -560,25 +548,32 @@ def main() -> None:
     save_tokens(args.token_file, auth_data)
 
     if args.validate_iri:
-        validate_token_data = get_facility_token(auth_data, validate_facility)
-        validate_url = get_validate_url(args, validate_facility)
-        validation_data = validate_iri_token(validate_token_data, validate_url)
-        validate_label = FACILITY_SCOPE_MAP[validate_facility]["label"]
-        print(f"IRI validation succeeded for {validate_label} against {validate_url}")
-        if isinstance(validation_data, dict):
-            session_info = validation_data.get("session_info")
-            if isinstance(session_info, dict):
-                session_id = session_info.get("session_id")
-                if session_id:
-                    print(f"IRI session_id: {session_id}")
-            task_id = validation_data.get("task_id")
-            if task_id:
-                print(f"IRI validation task_id: {task_id}")
-            task_uri = validation_data.get("task_uri")
-            if task_uri:
-                print(f"IRI validation task_uri: {task_uri}")
-        elif isinstance(validation_data, list):
-            print(f"IRI validation response items: {len(validation_data)}")
+        for validate_facility in validate_facilities:
+            validate_token_data = get_facility_token(auth_data, validate_facility)
+            validate_url = get_validate_url(args, validate_facility)
+            validation_data = validate_iri_token(validate_token_data, validate_url)
+            validate_label = FACILITY_SCOPE_MAP[validate_facility]["label"]
+            print(
+                f"IRI validation succeeded for {validate_label} "
+                f"against {validate_url}"
+            )
+            if isinstance(validation_data, dict):
+                session_info = validation_data.get("session_info")
+                if isinstance(session_info, dict):
+                    session_id = session_info.get("session_id")
+                    if session_id:
+                        print(f"{validate_label} session_id: {session_id}")
+                task_id = validation_data.get("task_id")
+                if task_id:
+                    print(f"{validate_label} validation task_id: {task_id}")
+                task_uri = validation_data.get("task_uri")
+                if task_uri:
+                    print(f"{validate_label} validation task_uri: {task_uri}")
+            elif isinstance(validation_data, list):
+                print(
+                    f"{validate_label} validation response items: "
+                    f"{len(validation_data)}"
+                )
 
     print(f"Saved token data to {args.token_file}")
     print(f"Selected facilities: {', '.join(facilities)}")

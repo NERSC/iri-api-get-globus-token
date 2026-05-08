@@ -20,7 +20,7 @@ This document explains how to use:
 - Extracts the NERSC IRI access token from `other_tokens`.
 - Requires tokens for the selected facilities to be present in `other_tokens`.
 - Prints both the NERSC IRI access token and the ALCF IRI access token with `--print-token`.
-- Can optionally validate a selected facility token by calling a facility IRI endpoint.
+- Can optionally validate selected facility tokens by calling facility IRI endpoints.
 - Saves token data to a secure local file by default.
 - Reuses and refreshes saved tokens when possible.
 
@@ -128,16 +128,17 @@ If refresh is not possible, or if refresh does not return all requested facility
 python get_globus_token.py --validate-iri
 ```
 
-With the default selected facilities, this validates the NERSC token by calling:
+By default, `--validate-iri` validates every selected facility. With the default selected facilities, it validates both NERSC and ALCF.
+
+For NERSC, validation calls:
 
 ```bash
 GET https://api.iri.nersc.gov/api/v1/account/projects
 ```
 
-with the NERSC IRI access token from `other_tokens`.
 If the response includes `session_info.authentications: {}`, the script treats that as a bad session and exits with guidance to re-run using `--force-login`.
 
-When exactly one facility is selected, `--validate-iri` validates that facility. For ALCF, the default validation call is the filesystem listing endpoint:
+For ALCF, validation calls the filesystem listing endpoint:
 
 ```bash
 GET https://api.alcf.anl.gov/api/v1/filesystem/ls/6115bd2c-957a-4543-abff-5fae52992ff2?path=/home/<username>/
@@ -149,7 +150,13 @@ The default ALCF resource ID is Home, and the default path is `/home/$USER/` exp
 python get_globus_token.py --facilities alcf --validate-iri --alcf-validate-path /home/<alcf-username>/
 ```
 
-If multiple facilities are selected, validation defaults to NERSC unless you pass `--validate-facility alcf`.
+To validate only one facility, select only that facility:
+
+```bash
+python get_globus_token.py --facilities alcf --validate-iri
+```
+
+`--iri-validate-url` is only valid when one facility is selected with `--facilities`.
 
 You can combine validation with token printing or refresh-only mode:
 
@@ -158,7 +165,7 @@ python get_globus_token.py --refresh-only --validate-iri --print-token
 python get_globus_token.py --force-login --validate-iri
 python get_globus_token.py --facilities nersc --validate-iri --print-token
 python get_globus_token.py --facilities alcf --refresh-only --validate-iri
-python get_globus_token.py --facilities nersc alcf --validate-iri --validate-facility alcf
+python get_globus_token.py --facilities nersc alcf --refresh-only --validate-iri
 ```
 
 ## Use a custom token file path
