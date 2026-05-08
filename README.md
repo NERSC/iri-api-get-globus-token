@@ -20,7 +20,7 @@ This document explains how to use:
 - Extracts the NERSC IRI access token from `other_tokens`.
 - Requires tokens for the selected facilities to be present in `other_tokens`.
 - Prints both the NERSC IRI access token and the ALCF IRI access token with `--print-token`.
-- Can optionally validate the NERSC IRI token by calling the IRI `account/projects` endpoint.
+- Can optionally validate a selected facility token by calling a facility IRI endpoint.
 - Saves token data to a secure local file by default.
 - Reuses and refreshes saved tokens when possible.
 
@@ -71,6 +71,8 @@ python get_globus_token.py --facilities alcf
 
 When `alcf` is included, the script switches to the ALCF-specific client ID and the interactive flow must be completed through Globus login to obtain the ALCF token.
 
+ALCF's IRI API may require your ALCF identity to be the primary Globus Auth identity. If you use both NERSC and ALCF and want to request both tokens in one login flow, use a Globus session whose primary identity is your ALCF identity.
+
 Supported facility names are:
 
 - `nersc`
@@ -110,15 +112,17 @@ python get_globus_token.py --refresh-only
 
 This attempts to refresh saved tokens without opening a browser login flow.
 It refreshes the top-level Globus Auth token when possible and also refreshes the selected facility tokens from `other_tokens` when their refresh tokens are available.
+If only one facility is selected, only that facility token is required to refresh successfully; tokens for other facilities already present in the file are preserved.
+The script tries the known Globus client IDs during refresh, so a token file created by the default combined NERSC+ALCF flow can still refresh an existing NERSC token when you run `--facilities nersc`.
 If refresh is not possible, or if refresh does not return all requested facility tokens, the script exits with an error instead of starting interactive login.
 
-## Validate the NERSC IRI token
+## Validate an IRI token
 
 ```bash
 python get_globus_token.py --validate-iri
 ```
 
-This calls:
+With the default selected facilities, this validates the NERSC token by calling:
 
 ```bash
 GET https://api.iri.nersc.gov/api/v1/account/projects
@@ -127,7 +131,19 @@ GET https://api.iri.nersc.gov/api/v1/account/projects
 with the NERSC IRI access token from `other_tokens`.
 If the response includes `session_info.authentications: {}`, the script treats that as a bad session and exits with guidance to re-run using `--force-login --prompt-login`.
 
-`--validate-iri` requires that `nersc` is included in `--facilities`.
+When exactly one facility is selected, `--validate-iri` validates that facility. For ALCF, the default validation call is the filesystem listing endpoint:
+
+```bash
+GET https://api.alcf.anl.gov/api/v1/filesystem/ls/6115bd2c-957a-4543-abff-5fae52992ff2?path=/home/<username>/
+```
+
+The default ALCF resource ID is Home, and the default path is `/home/$USER/` expanded by the script. Override it if your ALCF username differs from your local username:
+
+```bash
+python get_globus_token.py --facilities alcf --validate-iri --alcf-validate-path /home/<alcf-username>/
+```
+
+If multiple facilities are selected, validation defaults to NERSC unless you pass `--validate-facility alcf`.
 
 You can combine validation with token printing or refresh-only mode:
 
@@ -135,6 +151,8 @@ You can combine validation with token printing or refresh-only mode:
 python get_globus_token.py --refresh-only --validate-iri --print-token
 python get_globus_token.py --force-login --prompt-login --validate-iri
 python get_globus_token.py --facilities nersc --validate-iri --print-token
+python get_globus_token.py --facilities alcf --refresh-only --validate-iri
+python get_globus_token.py --facilities nersc alcf --validate-iri --validate-facility alcf
 ```
 
 ## Use a custom token file path
@@ -161,6 +179,9 @@ The script writes with private permissions (`0600`) and sets parent directory pe
   - Re-run with `--force-login` and ensure consent is granted for the NERSC IRI scope.
 - `Missing token for required ALCF IRI API scope`
   - Re-run with `--force-login` and ensure consent is granted for the ALCF IRI scope. If `alcf` is selected, the script uses the ALCF-specific client ID `8b84fc2d-49e9-49ea-b54d-b3a29a70cf31`.
+- ALCF IRI API rejects a token even though the ALCF scope is present
+  - ALCF may require the ALCF identity to be the primary Globus Auth identity. If your Globus account has a NERSC identity as primary and an ALCF identity linked underneath it, the ALCF IRI API may still reject the token.
+  - One working recovery path is to unlink the ALCF identity from the Globus account whose primary identity is NERSC, then log in to Globus using the ALCF identity and do not link it back to the NERSC-primary account before requesting the ALCF token.
 - IRI API returns `401`
   - Re-run the script with `--force-login --prompt-login` and open the authorization URL in a Chrome incognito window before completing login.
 - Server shows `session_info.authentications: {}`

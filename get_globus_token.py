@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import json
 import os
 import stat
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import globus_sdk
-from globus_sdk.exc import GlobusAPIError
+from globus_sdk.exc import GlobusAPIError, GlobusConnectionError
 
 DEFAULT_CLIENT_ID = "fae5c579-490a-4d76-b6eb-d78f65caeb63"
 ALCF_CLIENT_ID = "8b84fc2d-49e9-49ea-b54d-b3a29a70cf31"
+KNOWN_CLIENT_IDS = (DEFAULT_CLIENT_ID, ALCF_CLIENT_ID)
 RESOURCE_SERVER = "auth.globus.org"
 FACILITY_SCOPE_MAP = {
     "nersc": {
@@ -44,6 +48,8 @@ REQUIRED_SCOPES = {
     "urn:globus:auth:scope:auth.globus.org:view_identities",
 }
 DEFAULT_IRI_VALIDATE_URL = "https://api.iri.nersc.gov/api/v1/account/projects"
+ALCF_BASE_URL = "https://api.alcf.anl.gov"
+ALCF_HOME_RESOURCE_ID = "6115bd2c-957a-4543-abff-5fae52992ff2"
 
 SCOPE_LABELS = {
     config["scope"]: config["label"] for config in FACILITY_SCOPE_MAP.values()
@@ -54,6 +60,14 @@ def get_client_id(facilities: list[str]) -> str:
     if "alcf" in facilities:
         return ALCF_CLIENT_ID
     return DEFAULT_CLIENT_ID
+
+
+def get_refresh_client_ids(facilities: list[str]) -> list[str]:
+    client_ids = [get_client_id(facilities)]
+    for client_id in KNOWN_CLIENT_IDS:
+        if client_id not in client_ids:
+            client_ids.append(client_id)
+    return client_ids
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,14 +117,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--validate-iri",
         action="store_true",
-        help="Validate the IRI token by calling the IRI account/projects endpoint.",
+        help="Validate a selected facility token by calling an IRI endpoint.",
+    )
+    parser.add_argument(
+        "--validate-facility",
+        choices=sorted(FACILITY_SCOPE_MAP),
+        default=None,
+        help=(
+            "Facility token to validate with --validate-iri "
+            "(default: the only selected facility, otherwise nersc)."
+        ),
     )
     parser.add_argument(
         "--iri-validate-url",
-        default=DEFAULT_IRI_VALIDATE_URL,
+        default=None,
         help=(
-            "IRI endpoint used by --validate-iri "
-            f"(default: {DEFAULT_IRI_VALIDATE_URL})"
+            "Explicit IRI GET endpoint used by --validate-iri. "
+            "Defaults to NERSC account/projects for nersc and ALCF filesystem ls "
+            "for alcf."
+        ),
+    )
+    parser.add_argument(
+        "--alcf-validate-resource-id",
+        default=ALCF_HOME_RESOURCE_ID,
+        help=(
+            "ALCF resource_id used for default --validate-iri filesystem ls "
+            f"(default: {ALCF_HOME_RESOURCE_ID}, Home)."
+        ),
+    )
+    parser.add_argument(
+        "--alcf-validate-path",
+        default=None,
+        help=(
+            "ALCF filesystem path used for default --validate-iri filesystem ls "
+            "(default: /home/$USER/)."
         ),
     )
     return parser.parse_args()
@@ -235,14 +275,65 @@ def validate_auth_data(auth_data: dict, facilities: list[str]) -> dict:
     return auth_data
 
 
-def validate_nersc_iri_token(
-    nersc_iri_token_data: dict, validate_url: str
-) -> dict | list:
+def default_alcf_validate_path() -> str:
+    username = os.environ.get("USER") or os.environ.get("LOGNAME")
+    if not username:
+        raise RuntimeError(
+            "Could not determine a default ALCF validation path. "
+            "Pass --alcf-validate-path /home/<username>/."
+        )
+    return f"/home/{username}/"
+
+
+def build_alcf_ls_validate_url(resource_id: str, path: str) -> str:
+    quoted_resource_id = urllib.parse.quote(resource_id, safe="")
+    query = urllib.parse.urlencode(
+        {"path": path},
+        quote_via=urllib.parse.quote,
+        safe="/",
+    )
+    return (
+        f"{ALCF_BASE_URL}/api/v1/filesystem/ls/{quoted_resource_id}"
+        f"?{query}"
+    )
+
+
+def get_validate_facility(args: argparse.Namespace, facilities: list[str]) -> str:
+    if args.validate_facility:
+        validate_facility = args.validate_facility
+    elif len(facilities) == 1:
+        validate_facility = facilities[0]
+    else:
+        validate_facility = "nersc"
+
+    if validate_facility not in facilities:
+        raise RuntimeError(
+            f"--validate-iri requires including the '{validate_facility}' facility"
+        )
+    return validate_facility
+
+
+def get_validate_url(args: argparse.Namespace, validate_facility: str) -> str:
+    if args.iri_validate_url:
+        return args.iri_validate_url
+
+    if validate_facility == "nersc":
+        return DEFAULT_IRI_VALIDATE_URL
+
+    if validate_facility == "alcf":
+        path = args.alcf_validate_path or default_alcf_validate_path()
+        return build_alcf_ls_validate_url(args.alcf_validate_resource_id, path)
+
+    raise RuntimeError(f"No default validation endpoint for {validate_facility}")
+
+
+def validate_iri_token(facility_token_data: dict, validate_url: str) -> dict | list:
     request = urllib.request.Request(
         validate_url,
         headers={
             "accept": "application/json",
-            "Authorization": f"Bearer {nersc_iri_token_data['access_token']}",
+            "Authorization": f"Bearer {facility_token_data['access_token']}",
+            "User-Agent": "iri-api-client/1.0",
         },
         method="GET",
     )
@@ -315,51 +406,82 @@ def interactive_login(
 
 def refresh_tokens(
     client: globus_sdk.NativeAppAuthClient, refresh_token: str
-) -> dict | None:
-    try:
-        token_response = client.oauth2_refresh_token(refresh_token)
-        return token_response.data
-    except GlobusAPIError as exc:
-        print(
-            f"Refresh failed ({exc.http_status}); switching to interactive login."
-        )
-        return None
+) -> dict:
+    token_response = client.oauth2_refresh_token(refresh_token)
+    return token_response.data
+
+
+def refresh_tokens_with_client_ids(
+    refresh_token: str,
+    client_ids: list[str],
+    *,
+    token_label: str,
+) -> tuple[dict | None, str | None]:
+    failures = []
+    for client_id in client_ids:
+        client = globus_sdk.NativeAppAuthClient(client_id)
+        try:
+            return refresh_tokens(client, refresh_token), client_id
+        except GlobusAPIError as exc:
+            failures.append(f"{client_id}: HTTP {exc.http_status}")
+        except GlobusConnectionError:
+            failures.append(f"{client_id}: connection error")
+
+    print(
+        f"Refresh failed for {token_label} with known Globus client IDs "
+        f"({'; '.join(failures)})."
+    )
+    return None, None
 
 
 def refresh_stored_tokens(
-    client: globus_sdk.NativeAppAuthClient,
     stored_tokens: dict,
     facilities: list[str],
-) -> tuple[dict | None, bool]:
+    client_ids: list[str],
+) -> tuple[dict | None, bool, list[str]]:
     refreshed_tokens = dict(stored_tokens)
     used_refresh = False
+    used_client_ids = []
     auth_refresh_token = get_refresh_token(stored_tokens)
     if auth_refresh_token:
-        auth_data = refresh_tokens(client, auth_refresh_token)
+        auth_data, client_id = refresh_tokens_with_client_ids(
+            auth_refresh_token,
+            client_ids,
+            token_label="Globus Auth token",
+        )
         if auth_data is not None:
             refreshed_tokens = merge_auth_token_data(refreshed_tokens, auth_data)
             used_refresh = True
+            if client_id and client_id not in used_client_ids:
+                used_client_ids.append(client_id)
 
     for facility in facilities:
         scope = FACILITY_SCOPE_MAP[facility]["scope"]
         refresh_token = get_refresh_token_for_scope(stored_tokens, scope)
         if refresh_token:
-            refreshed_token_data = refresh_tokens(client, refresh_token)
+            label = FACILITY_SCOPE_MAP[facility]["label"]
+            refreshed_token_data, client_id = refresh_tokens_with_client_ids(
+                refresh_token,
+                client_ids,
+                token_label=f"{label} token",
+            )
             if refreshed_token_data is not None:
                 refreshed_tokens = replace_token_for_scope(
                     refreshed_tokens, scope, refreshed_token_data
                 )
                 used_refresh = True
+                if client_id and client_id not in used_client_ids:
+                    used_client_ids.append(client_id)
 
         try:
             get_facility_token(refreshed_tokens, facility)
         except RuntimeError:
-            return None, used_refresh
+            return None, used_refresh, used_client_ids
 
     if used_refresh:
-        return refreshed_tokens, True
+        return refreshed_tokens, True, used_client_ids
 
-    return None, False
+    return None, False, used_client_ids
 
 
 def main() -> None:
@@ -367,19 +489,23 @@ def main() -> None:
     if args.force_login and args.refresh_only:
         raise RuntimeError("Choose only one of --force-login or --refresh-only")
     facilities = get_selected_facilities(args)
-    if args.validate_iri and "nersc" not in facilities:
-        raise RuntimeError("--validate-iri requires including the 'nersc' facility")
+    validate_facility = (
+        get_validate_facility(args, facilities) if args.validate_iri else None
+    )
 
     client_id = get_client_id(facilities)
     client = globus_sdk.NativeAppAuthClient(client_id)
 
     auth_data = None
     used_refresh = False
+    used_refresh_client_ids = []
     if not args.force_login:
         stored = load_tokens(args.token_file)
         if stored:
-            auth_data, used_refresh = refresh_stored_tokens(
-                client, stored, facilities
+            auth_data, used_refresh, used_refresh_client_ids = refresh_stored_tokens(
+                stored,
+                facilities,
+                get_refresh_client_ids(facilities),
             )
 
     if auth_data is None:
@@ -398,7 +524,11 @@ def main() -> None:
     try:
         validate_auth_data(auth_data, facilities)
     except RuntimeError as exc:
-        if used_refresh and "Missing token for required " in str(exc):
+        if (
+            used_refresh
+            and not args.refresh_only
+            and "Missing token for required " in str(exc)
+        ):
             print(
                 "Refreshed tokens did not include all required facility tokens; "
                 "switching to interactive login."
@@ -413,23 +543,34 @@ def main() -> None:
     save_tokens(args.token_file, auth_data)
 
     if args.validate_iri:
-        nersc_iri_token_data = get_facility_token(auth_data, "nersc")
-        validation_data = validate_nersc_iri_token(
-            nersc_iri_token_data, args.iri_validate_url
-        )
-        print(f"IRI validation succeeded against {args.iri_validate_url}")
+        validate_token_data = get_facility_token(auth_data, validate_facility)
+        validate_url = get_validate_url(args, validate_facility)
+        validation_data = validate_iri_token(validate_token_data, validate_url)
+        validate_label = FACILITY_SCOPE_MAP[validate_facility]["label"]
+        print(f"IRI validation succeeded for {validate_label} against {validate_url}")
         if isinstance(validation_data, dict):
             session_info = validation_data.get("session_info")
             if isinstance(session_info, dict):
                 session_id = session_info.get("session_id")
                 if session_id:
                     print(f"IRI session_id: {session_id}")
+            task_id = validation_data.get("task_id")
+            if task_id:
+                print(f"IRI validation task_id: {task_id}")
+            task_uri = validation_data.get("task_uri")
+            if task_uri:
+                print(f"IRI validation task_uri: {task_uri}")
         elif isinstance(validation_data, list):
             print(f"IRI validation response items: {len(validation_data)}")
 
     print(f"Saved token data to {args.token_file}")
     print(f"Selected facilities: {', '.join(facilities)}")
     print(f"Globus client ID: {client_id}")
+    if used_refresh_client_ids:
+        print(
+            "Refresh client IDs used: "
+            f"{', '.join(used_refresh_client_ids)}"
+        )
     print(f"Granted Globus Auth scopes: {auth_data.get('scope', '')}")
     token_data_by_facility = {
         facility: get_facility_token(auth_data, facility) for facility in facilities
