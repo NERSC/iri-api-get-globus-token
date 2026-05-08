@@ -112,7 +112,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--prompt-login",
         action="store_true",
-        help="Add prompt=login to the Globus authorize URL to force re-authentication.",
+        help=(
+            "Add prompt=login to the Globus authorize URL to force "
+            "re-authentication. This is implied by --force-login."
+        ),
+    )
+    parser.add_argument(
+        "--no-prompt-login",
+        action="store_true",
+        help=(
+            "Do not add prompt=login when --force-login starts the browser "
+            "auth flow."
+        ),
     )
     parser.add_argument(
         "--validate-iri",
@@ -327,6 +338,10 @@ def get_validate_url(args: argparse.Namespace, validate_facility: str) -> str:
     raise RuntimeError(f"No default validation endpoint for {validate_facility}")
 
 
+def should_prompt_login(args: argparse.Namespace) -> bool:
+    return args.prompt_login or (args.force_login and not args.no_prompt_login)
+
+
 def validate_iri_token(facility_token_data: dict, validate_url: str) -> dict | list:
     request = urllib.request.Request(
         validate_url,
@@ -363,7 +378,7 @@ def validate_iri_token(facility_token_data: dict, validate_url: str) -> dict | l
             if isinstance(authentications, dict) and not authentications:
                 raise RuntimeError(
                     "IRI validation succeeded but session_info.authentications is empty. "
-                    "Re-run with --force-login --prompt-login and use a Chrome incognito window."
+                    "Re-run with --force-login and use a Chrome incognito window."
                 )
 
     return data
@@ -488,6 +503,8 @@ def main() -> None:
     args = parse_args()
     if args.force_login and args.refresh_only:
         raise RuntimeError("Choose only one of --force-login or --refresh-only")
+    if args.prompt_login and args.no_prompt_login:
+        raise RuntimeError("Choose only one of --prompt-login or --no-prompt-login")
     facilities = get_selected_facilities(args)
     validate_facility = (
         get_validate_facility(args, facilities) if args.validate_iri else None
@@ -518,7 +535,7 @@ def main() -> None:
                 f"or token refresh did not return all required tokens for: {facility_labels}."
             )
         auth_data = interactive_login(
-            client, facilities, prompt_login=args.prompt_login
+            client, facilities, prompt_login=should_prompt_login(args)
         )
 
     try:
@@ -534,7 +551,7 @@ def main() -> None:
                 "switching to interactive login."
             )
             auth_data = interactive_login(
-                client, facilities, prompt_login=args.prompt_login
+                client, facilities, prompt_login=should_prompt_login(args)
             )
             validate_auth_data(auth_data, facilities)
         else:

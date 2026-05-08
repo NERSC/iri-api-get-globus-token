@@ -93,15 +93,21 @@ The printed tokens correspond to the selected facilities. By default that means 
 python get_globus_token.py --force-login
 ```
 
-This skips refresh and always performs browser auth.
+This skips refresh and always performs browser auth. By default, it also adds `prompt=login` to the Globus authorization URL so Globus forces a fresh login instead of silently reusing an existing browser session.
 
-## Force a fresh IdP login prompt
+If you need a new authorization flow but want to allow Globus to reuse an existing browser session, pass:
+
+```bash
+python get_globus_token.py --force-login --no-prompt-login
+```
+
+## Force a fresh IdP login prompt explicitly
 
 ```bash
 python get_globus_token.py --force-login --prompt-login
 ```
 
-This adds `prompt=login` to the Globus authorization URL so Globus forces a fresh login at the identity provider instead of reusing an existing browser session.
+`--prompt-login` adds `prompt=login` to the Globus authorization URL so Globus forces a fresh login at the identity provider instead of reusing an existing browser session. This is implied by `--force-login`, but the explicit flag is still accepted.
 This is useful when the server side shows an empty `session_info.authentications` object or when the IRI API returns `401` with a token that otherwise looks valid.
 
 ## Refresh saved tokens only
@@ -129,7 +135,7 @@ GET https://api.iri.nersc.gov/api/v1/account/projects
 ```
 
 with the NERSC IRI access token from `other_tokens`.
-If the response includes `session_info.authentications: {}`, the script treats that as a bad session and exits with guidance to re-run using `--force-login --prompt-login`.
+If the response includes `session_info.authentications: {}`, the script treats that as a bad session and exits with guidance to re-run using `--force-login`.
 
 When exactly one facility is selected, `--validate-iri` validates that facility. For ALCF, the default validation call is the filesystem listing endpoint:
 
@@ -149,7 +155,7 @@ You can combine validation with token printing or refresh-only mode:
 
 ```bash
 python get_globus_token.py --refresh-only --validate-iri --print-token
-python get_globus_token.py --force-login --prompt-login --validate-iri
+python get_globus_token.py --force-login --validate-iri
 python get_globus_token.py --facilities nersc --validate-iri --print-token
 python get_globus_token.py --facilities alcf --refresh-only --validate-iri
 python get_globus_token.py --facilities nersc alcf --validate-iri --validate-facility alcf
@@ -183,6 +189,6 @@ The script writes with private permissions (`0600`) and sets parent directory pe
   - ALCF may require the ALCF identity to be the primary Globus Auth identity. If your Globus account has a NERSC identity as primary and an ALCF identity linked underneath it, the ALCF IRI API may still reject the token.
   - One working recovery path is to unlink the ALCF identity from the Globus account whose primary identity is NERSC, then log in to Globus using the ALCF identity and do not link it back to the NERSC-primary account before requesting the ALCF token.
 - IRI API returns `401`
-  - Re-run the script with `--force-login --prompt-login` and open the authorization URL in a Chrome incognito window before completing login.
+  - Re-run the script with `--force-login` and open the authorization URL in a Chrome incognito window before completing login.
 - Server shows `session_info.authentications: {}`
-  - Re-run the script with `--force-login --prompt-login` so Globus forces a fresh identity-provider login instead of reusing an existing browser session.
+  - Re-run the script with `--force-login` so Globus forces a fresh identity-provider login instead of reusing an existing browser session.
