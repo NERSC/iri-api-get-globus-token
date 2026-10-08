@@ -23,8 +23,8 @@ add a pending publisher at https://pypi.org/manage/account/publishing/ using:
 | Environment | `pypi` |
 
 For an existing project, add the same publisher under its Publishing settings.
-Create the GitHub `pypi` environment and configure its reviewers and release
-restrictions as appropriate for repository maintainers. No long-lived PyPI API
+The repository's GitHub `pypi` environment allows only tags matching `v*`.
+Repository maintainers can add required reviewers as appropriate. No long-lived PyPI API
 token is needed. Adding a pending publisher does not create the PyPI project;
 the first successful upload does that.
 

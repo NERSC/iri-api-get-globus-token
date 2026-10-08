@@ -5,10 +5,24 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import globus_sdk
+import requests
 
 from nersc_tokens import _backend as backend
 from nersc_tokens import auth, cli
+
+
+def oauth_response(data):
+    """Construct a real SDK response with the wire-format expires_in field."""
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps(data).encode()
+    response.headers["Content-Type"] = "application/json"
+    return globus_sdk.OAuthTokenResponse(
+        response, globus_sdk.NativeAppAuthClient(backend.DEFAULT_CLIENT_ID)
+    )
 
 
 class TokenTests(unittest.TestCase):
@@ -33,12 +47,18 @@ class TokenTests(unittest.TestCase):
 
     def test_refresh_preserves_other_tokens_and_refresh_token(self):
         refreshed = {"scope": backend.NERSC_IRI_SCOPE, "access_token": "new",
-                     "expires_at_seconds": time.time() + 3600}
-        with patch.object(backend, "refresh_tokens_with_client_ids", return_value=(refreshed, "id")):
+                     "resource_server": "nersc-iri", "expires_in": 3600,
+                     "token_type": "Bearer", "other_tokens": []}
+        response = oauth_response(refreshed)
+        client = Mock()
+        client.oauth2_refresh_token.return_value = response
+        with patch.object(globus_sdk, "NativeAppAuthClient", return_value=client):
             self.assertEqual(auth.get_access_token("iri", token_file=self.path, force_refresh=True), "new")
         data = json.loads(self.path.read_text())
         self.assertEqual(data["other_tokens"][1], self.data["other_tokens"][1])
         self.assertEqual(data["other_tokens"][0]["refresh_token"], "refresh")
+        self.assertGreater(data["other_tokens"][0]["expires_at_seconds"], time.time())
+        self.assertNotIn("expires_at_seconds", response.data)
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
     def test_expired_token_refresh_failure_is_not_returned(self):
@@ -116,11 +136,35 @@ class TokenTests(unittest.TestCase):
         self.assertEqual(json.loads(self.path.read_text())["other_tokens"][0]["access_token"], "cached")
 
     def test_login_preserves_unselected_facility(self):
-        response = {"resource_server": backend.RESOURCE_SERVER, "scope": " ".join(backend.REQUIRED_SCOPES),
-                    "other_tokens": [{"scope": backend.ALCF_IRI_SCOPE, "access_token": "alcf"}]}
-        with patch.object(backend, "interactive_login", return_value=response):
-            auth.login("iri", token_file=self.path, facilities=["alcf"])
-        self.assertEqual(backend.get_facility_token(json.loads(self.path.read_text()), "nersc")["access_token"], "cached")
+        response = oauth_response({
+            "resource_server": backend.RESOURCE_SERVER,
+            "scope": " ".join(backend.REQUIRED_SCOPES), "access_token": "auth",
+            "expires_in": 3600, "token_type": "Bearer",
+            "other_tokens": [{"scope": backend.ALCF_IRI_SCOPE, "access_token": "alcf",
+                              "resource_server": "alcf-iri", "expires_in": 3600,
+                              "token_type": "Bearer"}],
+        })
+        client = Mock()
+        client.oauth2_exchange_code_for_tokens.return_value = response
+        with patch.object(globus_sdk, "NativeAppAuthClient", return_value=client):
+            with patch("builtins.input", return_value="code"), contextlib.redirect_stderr(io.StringIO()):
+                auth.login("iri", token_file=self.path, facilities=["alcf"])
+        saved = json.loads(self.path.read_text())
+        self.assertEqual(backend.get_facility_token(saved, "nersc")["access_token"], "cached")
+        self.assertGreater(saved["expires_at_seconds"], time.time())
+        self.assertNotIn("expires_at_seconds", response.data["other_tokens"][0])
+        with patch.object(backend, "refresh_tokens_with_client_ids") as refresh:
+            self.assertEqual(auth.get_access_token("iri", token_file=self.path, facility="alcf"), "alcf")
+            refresh.assert_not_called()
+
+    def test_validation_timeout_returns_failure_status(self):
+        output = io.StringIO()
+        with patch.object(backend.urllib.request, "urlopen", side_effect=TimeoutError) as request:
+            with contextlib.redirect_stdout(output):
+                result = cli.main(["test-token", "iri", "--token-file", str(self.path)])
+        self.assertEqual(result, 1)
+        self.assertFalse(json.loads(output.getvalue())["ready"])
+        self.assertEqual(request.call_args.kwargs["timeout"], 30)
 
 
 if __name__ == "__main__":

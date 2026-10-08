@@ -13,7 +13,9 @@ Until a release is published on PyPI, install from this repository:
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install "git+https://github.com/NERSC/iri-api-get-globus-token.git#subdirectory=python"
-# Or, from a checkout:
+# Or, from the repository root of a checkout:
+python -m pip install ./python
+# From the python/ package directory:
 python -m pip install .
 ```
 
@@ -65,7 +67,8 @@ nersc-tokens test-token iri --facilities alcf --alcf-validate-path /home/<userna
 Single-facility retrieval prints a bare access token; multiple facilities print
 a JSON object keyed by facility (`nersc` and `alcf`). Login and refresh preserve
 unselected facility tokens. ALCF selection uses its specific Globus client ID.
-ALCF may require an ALCF-primary Globus identity; see troubleshooting below.
+ALCF may require an ALCF-primary Globus identity; see the
+[repository troubleshooting guide](https://github.com/NERSC/iri-api-get-globus-token#common-troubleshooting).
 `test-token` also accepts `--alcf-validate-resource-id` and, for one facility,
 `--iri-validate-url` as in the original script.
 
@@ -103,6 +106,8 @@ alcf_token = get_access_token("iri", facility="alcf")
 ```
 
 ## Development
+
+Run these commands from the `python/` package directory:
 
 ```bash
 python -m pip install -e . build

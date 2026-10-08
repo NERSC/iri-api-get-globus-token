@@ -48,6 +48,7 @@ REQUIRED_SCOPES = {
     "urn:globus:auth:scope:auth.globus.org:view_identities",
 }
 DEFAULT_IRI_VALIDATE_URL = "https://api.iri.nersc.gov/api/v1/account/projects"
+VALIDATION_TIMEOUT_SECONDS = 30
 ALCF_BASE_URL = "https://api.alcf.anl.gov"
 ALCF_HOME_RESOURCE_ID = "6115bd2c-957a-4543-abff-5fae52992ff2"
 
@@ -341,7 +342,7 @@ def validate_iri_token(facility_token_data: dict, validate_url: str) -> dict | l
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=VALIDATION_TIMEOUT_SECONDS) as response:
             body = response.read().decode("utf-8")
             data = json.loads(body) if body else {}
     except urllib.error.HTTPError as exc:
@@ -354,6 +355,8 @@ def validate_iri_token(facility_token_data: dict, validate_url: str) -> dict | l
         raise RuntimeError(
             f"IRI validation request failed for {validate_url}: {exc.reason}"
         ) from exc
+    except TimeoutError as exc:
+        raise RuntimeError("IRI validation request timed out") from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             f"IRI validation returned non-JSON data from {validate_url}"
@@ -370,6 +373,24 @@ def validate_iri_token(facility_token_data: dict, validate_url: str) -> dict | l
                 )
 
     return data
+
+
+def normalize_token_response(token_response: globus_sdk.OAuthTokenResponse) -> dict:
+    """Keep the OAuth response layout and the SDK's absolute expiry timestamps."""
+    by_resource_server = token_response.by_resource_server
+
+    def normalize(token_data: dict) -> dict:
+        normalized = dict(token_data)
+        normalized["expires_at_seconds"] = by_resource_server[
+            token_data["resource_server"]
+        ]["expires_at_seconds"]
+        return normalized
+
+    normalized = normalize(token_response.data)
+    normalized["other_tokens"] = [
+        normalize(item) for item in token_response.data.get("other_tokens", [])
+    ]
+    return normalized
 
 
 def interactive_login(
@@ -404,14 +425,14 @@ def interactive_login(
             f"Authorization code exchange failed with HTTP {exc.http_status}. "
             "Re-run the script and try again."
         ) from exc
-    return token_response.data
+    return normalize_token_response(token_response)
 
 
 def refresh_tokens(
     client: globus_sdk.NativeAppAuthClient, refresh_token: str
 ) -> dict:
     token_response = client.oauth2_refresh_token(refresh_token)
-    return token_response.data
+    return normalize_token_response(token_response)
 
 
 def refresh_tokens_with_client_ids(

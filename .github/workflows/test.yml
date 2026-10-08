@@ -5,13 +5,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.10', '3.13']
+        include:
+          - python-version: '3.10'
+            globus-sdk: 'globus-sdk==3.65.0'
+          - python-version: '3.13'
+            globus-sdk: 'globus-sdk'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install ./python build
+      - run: python -m pip install ./python build "${{ matrix.globus-sdk }}"
       - run: python -m unittest discover -s python/tests -v
       - run: python -m build python
       - run: |
