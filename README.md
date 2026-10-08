@@ -7,17 +7,20 @@ or newer. The existing facility scopes and Globus client IDs are reused.
 
 ## Install
 
-Until a release is published on PyPI, install from this repository:
+Install from PyPI:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "git+https://github.com/NERSC/iri-api-get-globus-token.git#subdirectory=python"
-# Or, from a checkout:
+python -m pip install nersc-tokens
+```
+
+Or install from a checkout:
+
+```bash
 python -m pip install ./python
 ```
 
-Once published, installation will be `python -m pip install nersc-tokens`.
 Package dependencies are declared in `python/pyproject.toml`; `requirements.txt` is
 also provided for users of the original script.
 
