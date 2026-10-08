@@ -78,6 +78,9 @@ Access and refresh tokens are stored in `~/.globus/nersc_tokens/tokens.json`
 with private file permissions. This separate location avoids overwriting the
 original script's combined NERSC/ALCF credentials. `clear-tokens` removes only
 this application's token file, without revoking tokens at Globus.
+Concurrent commands serialize cache updates so refreshing one facility preserves
+the other facility's latest credentials. An adjacent `.lock` file coordinates
+access and remains after `clear-tokens`; it contains no tokens.
 
 `get-token` returns a cached token until it is within 60 seconds of expiry,
 then uses its refresh token to obtain a new access token. Force a refresh with:
@@ -151,11 +154,11 @@ This document explains how to use:
 
 ## Prerequisites
 
-1. Python 3.9+ (recommended).
-2. `globus-sdk` installed:
+1. Python 3.10+.
+2. Install the script dependencies from the repository root:
 
 ```bash
-pip install globus-sdk
+python -m pip install -r requirements.txt
 ```
 
 3. For ALCF token acquisition, you must complete the Globus login flow. The ALCF login depends on that Globus authentication step to obtain the ALCF token.
@@ -303,8 +306,8 @@ The script writes with private permissions (`0600`) and sets parent directory pe
 
 ## Common troubleshooting
 
-- `ModuleNotFoundError: No module named 'globus_sdk'`
-  - Install dependency: `pip install globus-sdk`
+- `ModuleNotFoundError` for `globus_sdk` or `filelock`
+  - Install dependencies: `python -m pip install -r requirements.txt`
 - Refresh fails and script asks for login again
   - This is expected when refresh token expired/revoked.
 - Refresh-only mode fails

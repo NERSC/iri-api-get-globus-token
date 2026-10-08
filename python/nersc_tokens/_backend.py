@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
-import stat
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -12,6 +13,7 @@ import urllib.request
 from pathlib import Path
 
 import globus_sdk
+from filelock import FileLock, Timeout
 from globus_sdk.exc import GlobusAPIError, GlobusConnectionError
 
 DEFAULT_CLIENT_ID = "fae5c579-490a-4d76-b6eb-d78f65caeb63"
@@ -188,17 +190,33 @@ def load_tokens(token_file: Path) -> dict | None:
         return json.load(f)
 
 
+@contextlib.contextmanager
+def token_file_lock(token_file: Path):
+    """Serialize a complete cache transaction, including refresh-token rotation."""
+    token_file = token_file.resolve()
+    ensure_private_parent_dir(token_file)
+    lock = FileLock(str(token_file) + ".lock", timeout=120, mode=0o600)
+    try:
+        with lock:
+            yield
+    except Timeout as exc:
+        raise RuntimeError("Token file is busy. Retry after the other command finishes.") from exc
+
+
 def save_tokens(token_file: Path, tokens: dict) -> None:
     ensure_private_parent_dir(token_file)
-    tmp = token_file.with_suffix(".tmp")
-    with os.fdopen(
-        os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600),
-        "w",
-        encoding="utf-8",
-    ) as f:
-        json.dump(tokens, f, indent=2)
-    os.replace(tmp, token_file)
-    os.chmod(token_file, stat.S_IRUSR | stat.S_IWUSR)
+    # mkstemp creates an exclusive, private file in the same filesystem so
+    # replacement is atomic and independent writers never share an inode.
+    fd, name = tempfile.mkstemp(dir=token_file.parent, prefix=token_file.name + ".", suffix=".tmp")
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(tokens, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, token_file)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def get_refresh_token(stored_tokens: dict) -> str | None:
@@ -525,48 +543,49 @@ def main() -> None:
     auth_data = None
     used_refresh = False
     used_refresh_client_ids = []
-    if not args.force_login:
-        stored = load_tokens(args.token_file)
-        if stored:
-            auth_data, used_refresh, used_refresh_client_ids = refresh_stored_tokens(
-                stored,
-                facilities,
-                get_refresh_client_ids(facilities),
-            )
+    with token_file_lock(args.token_file):
+        if not args.force_login:
+            stored = load_tokens(args.token_file)
+            if stored:
+                auth_data, used_refresh, used_refresh_client_ids = refresh_stored_tokens(
+                    stored,
+                    facilities,
+                    get_refresh_client_ids(facilities),
+                )
 
-    if auth_data is None:
-        if args.refresh_only:
-            facility_labels = ", ".join(
-                FACILITY_SCOPE_MAP[facility]["label"] for facility in facilities
-            )
-            raise RuntimeError(
-                "Refresh-only mode failed. No usable saved refresh token was found "
-                f"or token refresh did not return all required tokens for: {facility_labels}."
-            )
-        auth_data = interactive_login(
-            client, facilities, prompt_login=should_prompt_login(args)
-        )
-
-    try:
-        validate_auth_data(auth_data, facilities)
-    except RuntimeError as exc:
-        if (
-            used_refresh
-            and not args.refresh_only
-            and "Missing token for required " in str(exc)
-        ):
-            print(
-                "Refreshed tokens did not include all required facility tokens; "
-                "switching to interactive login."
-            )
+        if auth_data is None:
+            if args.refresh_only:
+                facility_labels = ", ".join(
+                    FACILITY_SCOPE_MAP[facility]["label"] for facility in facilities
+                )
+                raise RuntimeError(
+                    "Refresh-only mode failed. No usable saved refresh token was found "
+                    f"or token refresh did not return all required tokens for: {facility_labels}."
+                )
             auth_data = interactive_login(
                 client, facilities, prompt_login=should_prompt_login(args)
             )
-            validate_auth_data(auth_data, facilities)
-        else:
-            raise
 
-    save_tokens(args.token_file, auth_data)
+        try:
+            validate_auth_data(auth_data, facilities)
+        except RuntimeError as exc:
+            if (
+                used_refresh
+                and not args.refresh_only
+                and "Missing token for required " in str(exc)
+            ):
+                print(
+                    "Refreshed tokens did not include all required facility tokens; "
+                    "switching to interactive login."
+                )
+                auth_data = interactive_login(
+                    client, facilities, prompt_login=should_prompt_login(args)
+                )
+                validate_auth_data(auth_data, facilities)
+            else:
+                raise
+
+        save_tokens(args.token_file, auth_data)
 
     if args.validate_iri:
         for validate_facility in validate_facilities:

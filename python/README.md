@@ -82,6 +82,9 @@ Access and refresh tokens are stored in `~/.globus/nersc_tokens/tokens.json`
 with private file permissions. This separate location avoids overwriting the
 original script's combined NERSC/ALCF credentials. `clear-tokens` removes only
 this application's token file, without revoking tokens at Globus.
+Concurrent commands serialize cache updates so refreshing one facility preserves
+the other facility's latest credentials. An adjacent `.lock` file coordinates
+access and remains after `clear-tokens`; it contains no tokens.
 
 `get-token` returns a cached token until it is within 60 seconds of expiry,
 then uses its refresh token to obtain a new access token. Force a refresh with:

@@ -11,8 +11,8 @@ python -m twine check dist/*
 
 ## One-time PyPI setup
 
-A PyPI project owner must configure a GitHub Trusted Publisher. For a new project,
-add a pending publisher at https://pypi.org/manage/account/publishing/ using:
+A PyPI project owner must configure a GitHub Trusted Publisher at
+https://pypi.org/manage/project/nersc-tokens/settings/publishing/ using:
 
 | Field | Value |
 | --- | --- |
@@ -22,20 +22,22 @@ add a pending publisher at https://pypi.org/manage/account/publishing/ using:
 | Workflow filename | `publish.yml` |
 | Environment | `pypi` |
 
-For an existing project, add the same publisher under its Publishing settings.
 The repository's GitHub `pypi` environment allows only tags matching `v*`.
 Repository maintainers can add required reviewers as appropriate. No long-lived PyPI API
-token is needed. Adding a pending publisher does not create the PyPI project;
-the first successful upload does that.
+token is needed for GitHub releases.
 
-See [PyPI's Trusted Publisher documentation](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
+See [PyPI's Trusted Publisher documentation](https://docs.pypi.org/trusted-publishers/adding-a-publisher/).
 
 ## Release
 
-1. Update `version` in `python/pyproject.toml` and merge the reviewed change.
-2. Publish a GitHub release with a matching tag, such as `v0.1.0`.
+Version `0.1.0` is already published on PyPI. Every release must use a new version;
+PyPI does not allow re-uploading an existing distribution filename.
+
+1. Update `version` in `python/pyproject.toml` (for example, to `0.1.1`) and merge
+   the reviewed change.
+2. Publish a GitHub release with a matching tag, such as `v0.1.1`.
 3. The `publish.yml` workflow tests and builds the wheel and source distribution,
    validates their metadata, and publishes using the configured Trusted Publisher.
 
 The workflow rejects a release tag that does not match the package version.
-After the first successful release, users can run `pip install nersc-tokens`.
+Users can install the latest published version with `pip install nersc-tokens`.
