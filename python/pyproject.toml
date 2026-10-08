@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nersc-tokens"
+version = "0.1.1"
+description = "Globus access tokens for the NERSC IRI API"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["globus-sdk>=3.65.0", "filelock>=3.12.0"]
+
+[project.urls]
+Repository = "https://github.com/NERSC/iri-api-get-globus-token"
+
+[project.scripts]
+nersc-tokens = "nersc_tokens.cli:main"
+
+[tool.setuptools]
+packages = ["nersc_tokens"]
