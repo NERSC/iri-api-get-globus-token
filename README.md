@@ -125,8 +125,24 @@ the project.
 
 ## Original `get_globus_token.py` usage
 
-Run the compatibility script from a full repository checkout. Its implementation
-is included in `python/nersc_tokens/_backend.py`.
+The original standalone script is available for legacy users. It works from a
+repository checkout or as a single downloaded file, without installing
+`nersc-tokens` or downloading the `python/` directory. It preserves the original
+command-line options and the default `~/.globus/auth_tokens.json` cache.
+
+For a single-file installation:
+
+```bash
+python -m pip install 'globus-sdk>=3.65.0'
+wget https://raw.githubusercontent.com/NERSC/iri-api-get-globus-token/main/get_globus_token.py
+python get_globus_token.py --facilities nersc --print-token
+```
+
+To refresh saved tokens without interactive login:
+
+```bash
+python get_globus_token.py --facilities nersc --refresh-only --print-token
+```
 
 This document explains how to use:
 
